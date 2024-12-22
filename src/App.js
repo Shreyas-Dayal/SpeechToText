@@ -32,6 +32,7 @@ import {
   LightMode,
   DarkMode,
   Clear,
+  Download,
 } from "@mui/icons-material";
 
 /* ------------------------------------------------------------------
@@ -84,9 +85,9 @@ const darkTheme = createTheme({
   },
   typography: {
     fontFamily: "'Poppins', sans-serif",
-    fontSize: 16, // Base font size
+    fontSize: 16,
     h4: {
-      fontSize: "2rem", // Larger heading
+      fontSize: "2rem",
       fontWeight: 700,
     },
     body1: {
@@ -94,7 +95,7 @@ const darkTheme = createTheme({
     },
     button: {
       textTransform: "none",
-      fontSize: "1.125rem", // Larger button text
+      fontSize: "1.125rem",
     },
   },
 });
@@ -151,7 +152,7 @@ const LanguageSelector = memo(function LanguageSelector({
 
 /* ------------------------------------------------------------------
    CONTROL BUTTONS COMPONENT
-   - Start/Stop mic, Copy, Clear
+   - Start/Stop mic, Copy, Clear, Export
 ------------------------------------------------------------------- */
 const ControlButtons = memo(function ControlButtons({
   isListening,
@@ -162,6 +163,7 @@ const ControlButtons = memo(function ControlButtons({
   onStop,
   onCopy,
   onClear,
+  onExport,
 }) {
   return (
     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
@@ -228,6 +230,20 @@ const ControlButtons = memo(function ControlButtons({
       >
         <Clear sx={{ mr: 1 }} /> Clear
       </Button>
+
+      <Button
+        variant="outlined"
+        color="success"
+        onClick={onExport}
+        disabled={!text && !interimText}
+        sx={{
+          borderRadius: 2,
+          fontWeight: "bold",
+        }}
+        fullWidth
+      >
+        <Download sx={{ mr: 1 }} /> Export
+      </Button>
     </Stack>
   );
 });
@@ -257,6 +273,147 @@ const TranscribedTextArea = memo(function TranscribedTextArea({
         borderRadius: 2,
         backgroundColor: "background.default",
         fontSize: "1.25rem", // Larger font in the text area
+      }}
+    />
+  );
+});
+
+/* ------------------------------------------------------------------
+   MICROPHONE VISUALIZER COMPONENT
+   - Displays a bar that represents audio input volume in real time.
+------------------------------------------------------------------- */
+const MicrophoneVisualizer = memo(function MicrophoneVisualizer({
+  isListening,
+}) {
+  const canvasRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const dataArrayRef = useRef(null);
+  const animationIdRef = useRef(null);
+  const streamRef = useRef(null);
+
+  // Initialize or teardown audio stream + analyzer when isListening changes
+  useEffect(() => {
+    if (isListening) {
+      startVisualizer();
+    } else {
+      stopVisualizer();
+    }
+
+    // Cleanup on unmount
+    return () => stopVisualizer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isListening]);
+
+  const startVisualizer = async () => {
+    try {
+      // Request audio stream
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Create audio context & analyser if not already
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext();
+      }
+      if (!analyserRef.current) {
+        analyserRef.current = audioContextRef.current.createAnalyser();
+        // Lower fftSize => fewer data points for simpler visualization
+        analyserRef.current.fftSize = 256;
+      }
+
+      // Connect stream to analyser
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      source.connect(analyserRef.current);
+
+      // Prepare data array for amplitude or frequency data
+      const bufferLength = analyserRef.current.frequencyBinCount;
+      dataArrayRef.current = new Uint8Array(bufferLength);
+
+      // Start the drawing loop
+      draw();
+    } catch (error) {
+      console.error("Error accessing microphone:", error);
+    }
+  };
+
+  const stopVisualizer = () => {
+    if (animationIdRef.current) {
+      cancelAnimationFrame(animationIdRef.current);
+      animationIdRef.current = null;
+    }
+    if (streamRef.current) {
+      // Stop all audio tracks
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    // Optionally disconnect the source/analyser to free resources
+  };
+
+  // Draw the volume bar in the canvas
+  const draw = () => {
+    if (!canvasRef.current || !analyserRef.current || !dataArrayRef.current) {
+      return;
+    }
+  
+    // request next frame
+    animationIdRef.current = requestAnimationFrame(draw);
+  
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const { width, height } = canvas;
+  
+    // Clear previous frame
+    ctx.clearRect(0, 0, width, height);
+  
+    // Get time-domain data
+    analyserRef.current.getByteTimeDomainData(dataArrayRef.current);
+  
+    // Draw background gradient
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "#1e3a8a"); // Indigo-900
+    gradient.addColorStop(1, "#2563eb"); // Blue-600
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+  
+    // Draw waveform line
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#4ade80"; // Green-400
+    ctx.shadowColor = "#4ade80";
+    ctx.shadowBlur = 15;
+  
+    ctx.beginPath();
+  
+    const sliceWidth = width / dataArrayRef.current.length;
+    let x = 0;
+  
+    for (let i = 0; i < dataArrayRef.current.length; i++) {
+      const value = dataArrayRef.current[i] / 128.0; // Normalize around 128
+      const y = (value * height) / 2; // Scale to canvas height
+  
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+  
+      x += sliceWidth;
+    }
+  
+    ctx.lineTo(width, height / 2); // End at middle of canvas
+    ctx.stroke();
+  };
+  
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={300}
+      height={60}
+      style={{
+        display: "block",
+        margin: "0 auto",
+        backgroundColor: "#e2e8f0", // gray-200 for light background
+        borderRadius: 4,
       }}
     />
   );
@@ -349,7 +506,7 @@ export default function SpeechToText() {
   }, []);
 
   /* --------------------------------------------------------------
-     COPY/CLEAR HANDLERS
+     COPY/CLEAR/EXPORT HANDLERS
   -------------------------------------------------------------- */
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(text).then(() => {
@@ -363,6 +520,24 @@ export default function SpeechToText() {
     setInterimText("");
     setError("");
   }, []);
+
+  // Export the transcript as a .txt file
+  const handleExport = useCallback(() => {
+    // Create a blob from the text
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    // Create a temporary link to trigger download
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "transcript.txt";
+    document.body.appendChild(link);
+    link.click();
+
+    // Clean up
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [text]);
 
   /* --------------------------------------------------------------
      CLEANUP ON UNMOUNT
@@ -415,7 +590,7 @@ export default function SpeechToText() {
                 onChangeLanguage={setLanguage}
               />
 
-              {/* Control Buttons: Start, Stop, Copy, Clear */}
+              {/* Control Buttons: Start, Stop, Copy, Clear, Export */}
               <ControlButtons
                 isListening={isListening}
                 text={text}
@@ -425,7 +600,11 @@ export default function SpeechToText() {
                 onStop={stopListening}
                 onCopy={handleCopy}
                 onClear={handleClear}
+                onExport={handleExport}
               />
+
+              {/* Microphone Visualizer - Only "active" when isListening */}
+              {/* <MicrophoneVisualizer isListening={isListening} /> */}
 
               {/* Transcribed Text Area */}
               <TranscribedTextArea
